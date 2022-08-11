@@ -6,6 +6,7 @@ import torchvision.transforms as transforms
 import numpy as np
 import time
 import os
+from torchvision.utils import save_image
 
 def plot_energy(ET, EF):
     x = range(len(ET))
@@ -132,8 +133,8 @@ def init_weights(Layer):
             torch.nn.init.constant_(Layer.bias, 0)
 
 torch.pi = torch.as_tensor(np.pi)
-def EBM_loss(image, image_test, z_true, z_fake, G, EBM, eps=1e-6):
-    PT = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_true ** 2) / 2).sum(dim=1) * 1 / (
+def EBM_loss(image, image_test, z_true, z_fake, G, EBM,  eps=1e-6):
+    PT = (1 / (torch.sqrt(2 * torch.pi)) * torch.exp((-(z_true) ** 2) / (2))).sum(dim=1) * 1 / (
                 torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_true) + image) ** 2).sum(dim=1)
     PF = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_fake ** 2) / 2).sum(dim=1) * 1 / (
             torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_fake) + image_test) ** 2).sum(
@@ -147,7 +148,7 @@ def EBM_loss(image, image_test, z_true, z_fake, G, EBM, eps=1e-6):
     loss = torch.log(ET/(ET+PT) + eps) + torch.log(PF/(EF+PF) + eps)
     return -torch.mean(loss), ET/(ET+PT), PF/(EF+PF), ET, EF
 
-def EBMX_loss(image, image_test, z_true, z_fake, G, EBM, mu_true, s, eps=1e-6):
+def EBMX_loss(image, image_test, z_true, z_fake, G, EBM, mu_true, s, mu_fake, s_fake, eps=1e-6):
     PT = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_true ** 2) / 2).sum(dim=1) * 1 / (
             torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_true) + image) ** 2).sum(dim=1)
     PF = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_fake ** 2) / 2).sum(dim=1) * 1 / (
@@ -158,7 +159,7 @@ def EBMX_loss(image, image_test, z_true, z_fake, G, EBM, mu_true, s, eps=1e-6):
             torch.sqrt(2 * torch.pi) * s) * torch.exp(-1 / (2 * s * s) * (-z_true + mu_true) ** 2)).sum(
         dim=1)
     EF = torch.exp(EBM(G(z_fake)).squeeze()) * (1 / (
-            torch.sqrt(2 * torch.pi) * 1) * torch.exp(-1 / (2 * 1 * 1) * (-z_fake + 0) ** 2)).sum(
+            torch.sqrt(2 * torch.pi) * s_fake) * torch.exp(-1 / (2 * s_fake * s_fake) * (-z_fake + mu_fake) ** 2)).sum(
         dim=1)
     print("PT", PT.mean())
     print("PF", PF.mean())
@@ -167,7 +168,7 @@ def EBMX_loss(image, image_test, z_true, z_fake, G, EBM, mu_true, s, eps=1e-6):
     loss = torch.log(ET / (ET + PT) + eps) + torch.log(PF / (EF + PF) + eps)
     return -torch.mean(loss), ET / (ET + PT), PF / (EF + PF), ET, EF
 
-folder = "results22_normal_constant_g3lr_1e5_infer"
+folder = "results23_normal_constant_g3lr_1e5_infer"
 if not os.path.exists(folder):
     os.makedirs(folder)
 
@@ -251,8 +252,11 @@ for epoch in range(n_epochs):
   #      z_infer = E(images)
         x_gen_train = G(z_infer)
         x_gen_test = G(z)
+        mu_fake, logvar_fake = E(x_gen_test)
+        s_fake = torch.exp(0.5 * logvar_fake)
         # compute losses
-        loss_EBM, true_acc, false_acc, ET, EF = EBMX_loss(images, x_gen_test, z_infer, z, G, EBM, mu, std)
+    #    loss_EBM, true_acc, false_acc, ET, EF = EBM_loss(images, x_gen_test, z_infer, z, G, EBM)
+        loss_EBM, true_acc, false_acc, ET, EF = EBMX_loss(images, x_gen_test, z_infer, z, G, EBM, mu, std, mu_fake, s_fake)
         optimizer_EBM.zero_grad()
         loss_EBM.backward()
         optimizer_EBM.step()
@@ -266,8 +270,11 @@ for epoch in range(n_epochs):
  #       z_infer = E(images)
         x_gen_train = G(z_infer)
         x_gen_test = G(z)
+        mu_fake, logvar_fake = E(x_gen_test)
+        s_fake = torch.exp(0.5 * logvar_fake)
         # compute Pi
-        loss_EG, true_acc_g, false_acc_g, ET, EF = EBMX_loss(images, x_gen_test, z_infer,  z, G, EBM, mu, std)
+     #   loss_EG, true_acc_g, false_acc_g, ET, EF = EBM_loss(images, x_gen_test, z_infer,  z, G, EBM, mu, std)
+        loss_EG, true_acc_g, false_acc_g, ET, EF = EBMX_loss(images, x_gen_test, z_infer,  z, G, EBM, mu, std, mu_fake, s_fake)
         loss_EG = loss_EG * -1
         optimizer_EG.zero_grad()
         loss_EG.backward()
@@ -334,3 +341,7 @@ for epoch in range(n_epochs):
                 ax[2, i].axis('off')
             plt.savefig(folder + "/plot_energy_%05d.png" % (epoch))
             plt.close()
+
+            z = torch.rand(64, latent_dim).cuda()
+            gener = G(z).reshape(64, 1, img_dim, img_dim).cpu()
+            save_image(gener, folder + "/generation_%05d.png" % (epoch))
