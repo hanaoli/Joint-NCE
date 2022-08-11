@@ -7,7 +7,7 @@ import numpy as np
 import time
 import os
 
-folder = "results20_normal_constant_g3lr_1e5_0.5"
+folder = "results22_normal_constant_g3lr_1e5_infer"
 if not os.path.exists(folder):
     os.makedirs(folder)
 
@@ -16,7 +16,7 @@ latent_dim = 50
 img_dim = 28
 batch_size = 128
 n_epochs = 2000
-l_rate = 1e-5
+l_rate = 1e-6
 
 
 def plot_energy(ET, EF):
@@ -57,9 +57,34 @@ class Encoder(nn.Module):
             nn.LeakyReLU(0.2),
             nn.Linear(1024, latent_dim)
         )
+        self.fc1 = nn.Linear(img_dim * img_dim, 1024)
+        self.lrelu = nn.LeakyReLU(0.2)
+        self.bn = nn.BatchNorm1d(1024)
+        self.fc2 = nn.Linear(1024, 1024)
+        self.fc21 = nn.Linear(1024, latent_dim)
+        self.fc22 = nn.Linear(1024, latent_dim)
 
-    def forward(self, X):
-        return self.layers(X)
+    def forward(self, x):
+        o1 = self.lrelu(self.fc1(x))
+        o2 = self.lrelu(self.bn(self.fc2(o1)))
+        return self.fc21(o2), self.fc22(o2)
+
+'''
+class Encoder(nn.Module):
+    def __init__(self):
+        super(Encoder, self).__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(img_dim * img_dim, 1024),
+            nn.LeakyReLU(0.2),
+            nn.Linear(1024, 1024),
+            nn.BatchNorm1d(1024),
+            nn.LeakyReLU(0.2),
+            nn.Linear(1024, latent_dim)
+        )
+
+    def forward(self, x):
+        return self.layers(x)
+'''
 
 class Generator(nn.Module):
     def __init__(self):
@@ -78,10 +103,10 @@ class Generator(nn.Module):
         return self.layers(z)
 
 
-class Discriminator(nn.Module):
+class Energy(nn.Module):
     def __init__(self):
         super(Discriminator, self).__init__()
-        self.c = nn.Parameter(torch.zeros(1))
+        self.c = nn.Parameter(torch.tensor(0).float())
         self.layers = nn.Sequential(
             nn.Linear(img_dim * img_dim + latent_dim, 1024),
             nn.LeakyReLU(0.2),
@@ -89,7 +114,6 @@ class Discriminator(nn.Module):
             nn.BatchNorm1d(1024),
             nn.LeakyReLU(0.2),
             nn.Linear(1024, 1),
-           # nn.ReLU()
         )
 
     def forward(self, X, z):
@@ -104,23 +128,20 @@ def init_weights(Layer):
             torch.nn.init.constant_(Layer.bias, 0)
 
 torch.pi = torch.as_tensor(np.pi)
-def EBM_loss(image, image_test, z_true, x_recon, ET, EF, z_fake, G, eps=1e-6):
-    PT = 1/(torch.sqrt(2*torch.pi)) * torch.exp(-(z_true**2)/2).sum(dim=1) * 1/(torch.sqrt(2*torch.pi)*0.3) * torch.exp(-1/(2*0.3*0.3)*(-x_recon + image)**2).sum(dim=1)
-    PF = 1/(torch.sqrt(2*torch.pi)) * torch.exp(-(z_fake**2)/2).sum(dim=1) * 1/(torch.sqrt(2*torch.pi)*0.3) * torch.exp(-1/(2*0.3*0.3)*(-G(z_fake) + image_test)**2).sum(dim=1)
+def EBM_loss(image, image_test, z_true, z_fake, G, EBM, eps=1e-6):
+    PT = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_true ** 2) / 2).sum(dim=1) * 1 / (
+                torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_true) + image) ** 2).sum(dim=1)
+    PF = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_fake ** 2) / 2).sum(dim=1) * 1 / (
+            torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_fake) + image_test) ** 2).sum(
+        dim=1)
+    ET = torch.exp(EBM(images, z_true).squeeze())
+    EF = torch.exp(EBM(G(z_fake), z).squeeze())
     print("PT",PT.mean())
     print("PF", PF.mean())
     print("ET",ET.mean())
     print("EF",EF.mean())
     loss = torch.log(ET/(ET+PT) + eps) + torch.log(PF/(EF+PF) + eps)
-    return -torch.mean(loss), ET/(ET+PT), PF/(EF+PF)
-
-def EG_loss(image, image_test, z_true, x_recon, ET, EF, z_fake, G, eps=1e-6):
-    PT = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_true ** 2) / 2).sum(dim=1) * 1 / (
-                torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-x_recon + image) ** 2).sum(dim=1)
-    PF = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_fake ** 2) / 2).sum(dim=1) * 1 / (
-                torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_fake) + image_test) ** 2).sum(dim=1)
-    loss =  torch.log(PT/(ET+PT) + eps) + torch.log(EF/(EF+PF) + eps) #+
-    return -torch.mean(loss), ET/(ET+PT), PF/(EF+PF)
+    return -torch.mean(loss), ET/(ET+PT), PF/(EF+PF), ET, EF
 
 
 transform = transforms.Compose([transforms.ToTensor()])
@@ -133,23 +154,24 @@ train_data = torch.utils.data.DataLoader(
 
 E = Encoder().cuda()
 G = Generator().cuda()
-EBM = Discriminator().cuda()
+EBM = Energy().cuda()
 
 E.apply(init_weights)
 G.apply(init_weights)
 EBM.apply(init_weights)
 
-#optimizers with weight decay
+#optimizers
 optimizer_EG = torch.optim.Adam(list(E.parameters()) + list(G.parameters()),
-                                lr=l_rate*3, betas=(0.5, 0.999), weight_decay=1e-5)
+                                lr=0.000001, betas=(0.5, 0.999))
 optimizer_EBM = torch.optim.Adam(EBM.parameters(),
-                               lr=l_rate, betas=(0.5, 0.999), weight_decay=1e-5)
+                               lr=0.000001, betas=(0.5, 0.999))
 
 ET_list = []
 EF_list = []
 EBM_loss_list = []
 true_acc_list = []
 false_acc_list = []
+
 for epoch in range(n_epochs):
     start_time = time.time()
     EBM_loss_acc = 0.
@@ -162,95 +184,51 @@ for epoch in range(n_epochs):
     E.train()
     G.train()
 
-    #     scheduler_D.step()
-    #     scheduler_EG.step()
-
     for i, (images, labels) in enumerate(train_data):
         # Sample True
-        '''
-        images = images.cuda()
-        images = images.reshape(images.size(0), -1)
-
-        z_infer = E(images)
-        x_gen_train = G(z_infer)
-
-        # Sample Fake
-        z = torch.randn(images.size(0), 100).cuda()
-
-        x_gen_test = G(z)
-
-        z2 = torch.randn(images.size(0), 100).cuda()
-        x_fake = G(z2)
-
-        # compute Pi
-        ET = torch.exp(EBM(images, z_infer).squeeze())
-        EF = torch.exp(EBM(x_gen_test, z).squeeze())
-        # compute losses
-        loss_EBM = EBM_loss(images, x_gen_test, z_infer, x_gen_train, ET, EF, z2, x_fake)
-        loss_EG = EG_loss(images, x_gen_test, z_infer, x_gen_train, ET, EF, z2, x_fake)
-
-        ET_loss = ET.mean()
-        EF_loss = EF.mean()
-        EBM_loss_acc += loss_EBM.item()
-        EG_loss_acc += loss_EG.item()
-
-        EBM_loss_list.append(EBM_loss_acc)
-        ET_list.append(ET_loss.detach().cpu().numpy())
-        EF_list.append(EF_loss.detach().cpu().numpy())
-
-        # Discriminator training
-        optimizer_EBM.zero_grad()
-        loss_EBM.backward(retain_graph=True)
-
-        # Encoder & Generator training
-        optimizer_EG.zero_grad()
-        loss_EG.backward()
-        optimizer_EBM.step()
-        optimizer_EG.step()
-        '''
         images = images.cuda()
         images = images.reshape(images.size(0), -1)
 
         # Sample Fake
         z = torch.randn(images.size(0), latent_dim).cuda()
 
+        # Obtain Latent
+        mu, logvar = E(images)
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std).cuda()
+        #     true_acc = torch.tensor(0).float()
+        #  while true_acc.mean() < 0.5:
+        mu, logvar = E(images)
+        std = torch.exp(0.5 * logvar)
+        z_infer = eps.mul(std).add_(mu)
+        print("Zmax", z_infer.max())
+        print("Zmin", z_infer.min())
+  #      z_infer = E(images)
+        x_gen_train = G(z_infer)
+        x_gen_test = G(z)
 
-        true_acc = torch.tensor(0).float()
-        while true_acc.mean() < 0.5:
-            z_infer = E(images)
-            x_gen_train = G(z_infer)
-            x_gen_test = G(z)
-            # compute Pi
-            ET = torch.exp(EBM(images, z_infer).squeeze())
-            EF = torch.exp(EBM(x_gen_test, z).squeeze())
-            # compute losses
-            loss_EBM, true_acc, false_acc = EBM_loss(images, x_gen_test, z_infer, x_gen_train, ET, EF, z, G)
-            optimizer_EBM.zero_grad()
-            loss_EBM.backward()
-            optimizer_EBM.step()
+        # compute losses
+        loss_EBM, true_acc, false_acc, ET, EF = EBM_loss(images, x_gen_test, z_infer, z, G, EBM)
+        optimizer_EBM.zero_grad()
+        loss_EBM.backward()
+        optimizer_EBM.step()
 
-      #  z_infer = E(images)
-      #  x_gen_train = G(z_infer)
+        # Upadte EG
+  #      false_acc_g = torch.tensor(0).float()
+ #       while false_acc_g.mean() < 0.5:
+        mu, logvar = E(images)
+        std = torch.exp(0.5 * logvar)
+        z_infer = eps.mul(std).add_(mu)
+ #       z_infer = E(images)
+        x_gen_train = G(z_infer)
+        x_gen_test = G(z)
+        # compute Pi
+        loss_EG, true_acc_g, false_acc_g, ET, EF = EBM_loss(images, x_gen_test, z_infer,  z, G, EBM)
+        loss_EG = loss_EG * -1
+        optimizer_EG.zero_grad()
+        loss_EG.backward()
+        optimizer_EG.step()
 
-        # Sample Fake
-     #   z = torch.randn(images.size(0), latent_dim).cuda()
-
-    #    x_gen_test = G(z)
-
-      #  z2 = torch.randn(images.size(0), latent_dim).cuda()
-     #   x_fake = G(z2)
-        true_acc_g = torch.tensor(1).float()
-        while true_acc_g.mean() > 0.5:
-            z_infer = E(images)
-            x_gen_train = G(z_infer)
-            x_gen_test = G(z)
-            # compute Pi
-            ET = torch.exp(EBM(images, z_infer).squeeze())
-            EF = torch.exp(EBM(x_gen_test, z).squeeze())
-            loss_EG, true_acc_g, false_acc_g = EG_loss(images, x_gen_test, z_infer, x_gen_train, ET, EF, z, G)
-            optimizer_EG.zero_grad()
-            loss_EG.backward()
-            optimizer_EG.step()
 
         ET_loss += ET.mean()
         EF_loss += EF.mean()
@@ -287,7 +265,12 @@ for epoch in range(n_epochs):
             real = images[:n_show]
             z = torch.rand(n_show, latent_dim).cuda()
             gener = G(z).reshape(n_show, img_dim, img_dim).cpu().numpy()
-            recon = G(E(real)).reshape(n_show, img_dim, img_dim).cpu().numpy()
+            mu, logvar = E(real)
+            std = torch.exp(0.5 * logvar)
+            eps = torch.randn_like(std).cuda()
+            z_infer = eps.mul(std).add_(mu)
+       #     z_infer = E(real)
+            recon = G(z_infer).reshape(n_show, img_dim, img_dim).cpu().numpy()
             real = real.reshape(n_show, img_dim, img_dim).cpu().numpy()
 
             fig, ax = plt.subplots(3, n_show, figsize=(15, 5))
