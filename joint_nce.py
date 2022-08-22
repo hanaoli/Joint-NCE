@@ -35,6 +35,14 @@ def plot_loss(loss):
     plt.savefig(folder + "/loss.png")
     plt.close()
 
+def plot_recon(recon):
+    x = range(len(recon))
+    plt.figure()
+    plt.plot(x, recon, color='red', label='Recon')
+    plt.legend(loc="upper left")
+    plt.savefig(folder + "/recon.png")
+    plt.close()
+
 class Encoder(nn.Module):
     def __init__(self):
         super(Encoder, self).__init__()
@@ -48,6 +56,7 @@ class Encoder(nn.Module):
         )
         self.fc1 = nn.Linear(img_dim * img_dim, 1024)
         self.lrelu = nn.LeakyReLU(0.2)
+        self.relu = nn.ReLU()
         self.bn = nn.BatchNorm1d(1024)
         self.fc2 = nn.Linear(1024, 1024)
         self.fc21 = nn.Linear(1024, latent_dim)
@@ -97,12 +106,12 @@ class Energy(nn.Module):
         super(Energy, self).__init__()
         self.c = nn.Parameter(torch.tensor(0).float())
         self.layers = nn.Sequential(
-            nn.Linear(img_dim * img_dim + latent_dim, 1024),
+            nn.Linear(img_dim * img_dim + latent_dim, 128),
             nn.LeakyReLU(0.2),
-            nn.Linear(1024, 1024),
-            nn.BatchNorm1d(1024),
+            nn.Linear(128, 128),
+            nn.BatchNorm1d(128),
             nn.LeakyReLU(0.2),
-            nn.Linear(1024, 1),
+            nn.Linear(128, 1),
         )
 
     def forward(self, X, z):
@@ -113,13 +122,23 @@ class EnergyX(nn.Module):
     def __init__(self):
         super(EnergyX, self).__init__()
         self.c = nn.Parameter(torch.tensor(0).float())
+        '''
         self.layers = nn.Sequential(
-            nn.Linear(img_dim * img_dim, 1024),
+            nn.Linear(img_dim * img_dim, 128),
             nn.LeakyReLU(0.2),
-            nn.Linear(1024, 1024),
-            nn.BatchNorm1d(1024),
+            nn.Linear(128, 128),
+            nn.BatchNorm1d(128),
             nn.LeakyReLU(0.2),
-            nn.Linear(1024, 1),
+            nn.Linear(128, 1),
+        )
+        '''
+        self.layers = nn.Sequential(
+            nn.Linear(img_dim * img_dim, 128),
+        #    nn.ReLU(),
+        #    nn.Linear(128, 128),
+        #    nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
         )
 
     def forward(self, x):
@@ -133,6 +152,8 @@ def init_weights(Layer):
             torch.nn.init.constant_(Layer.bias, 0)
 
 torch.pi = torch.as_tensor(np.pi)
+
+'''
 def EBM_loss(image, image_test, z_true, z_fake, G, EBM,  eps=1e-6):
     PT = (1 / (torch.sqrt(2 * torch.pi)) * torch.exp((-(z_true) ** 2) / (2))).sum(dim=1) * 1 / (
                 torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_true) + image) ** 2).sum(dim=1)
@@ -147,25 +168,33 @@ def EBM_loss(image, image_test, z_true, z_fake, G, EBM,  eps=1e-6):
     print("EF",EF.mean())
     loss = torch.log(ET/(ET+PT) + eps) + torch.log(PF/(EF+PF) + eps)
     return -torch.mean(loss), ET/(ET+PT), PF/(EF+PF), ET, EF
+'''
 
-def EBMX_loss(image, image_test, z_true, z_fake, G, EBM, mu_true, s, mu_fake, s_fake, eps=1e-6):
-    PT = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_true ** 2) / 2).sum(dim=1) * 1 / (
-            torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_true) + image) ** 2).sum(dim=1)
-    PF = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_fake ** 2) / 2).sum(dim=1) * 1 / (
-            torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_fake) + image_test) ** 2).sum(
+def EBMX_loss(image, image_test, z_true, z_fake, G, EBM, mu_true, s, mu_fake, s_fake, eps=1e-6, m=True):
+    PT = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_true ** 2) / 2).mean(dim=1) * 1 / (
+            torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_true) + image) ** 2).mean(dim=1)
+    PF = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_fake ** 2) / 2).mean(dim=1) * 1 / (
+            torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_fake) + image_test) ** 2).mean(
         dim=1)
+
 
     ET = torch.exp(EBM(image).squeeze()) * (1 / (
-            torch.sqrt(2 * torch.pi) * s) * torch.exp(-1 / (2 * s * s) * (-z_true + mu_true) ** 2)).sum(
+            torch.sqrt(2 * torch.pi) * s)* torch.exp(-1 / (2 * s * s) * (z_true - mu_true) ** 2)).mean(
         dim=1)
     EF = torch.exp(EBM(G(z_fake)).squeeze()) * (1 / (
-            torch.sqrt(2 * torch.pi) * s_fake) * torch.exp(-1 / (2 * s_fake * s_fake) * (-z_fake + mu_fake) ** 2)).sum(
+            torch.sqrt(2 * torch.pi) * s_fake) * torch.exp(-1  / (2 * s_fake * s_fake) * (z_fake - mu_fake) ** 2)).mean(
         dim=1)
     print("PT", PT.mean())
     print("PF", PF.mean())
     print("ET", ET.mean())
     print("EF", EF.mean())
-    loss = torch.log(ET / (ET + PT) + eps) + torch.log(PF / (EF + PF) + eps)
+
+    loss = torch.log(ET / (ET + PT) + eps).mean() + torch.log(PF / (EF + PF) + eps).mean()
+   # else:
+   #     loss = torch.log(1 + PT / (ET) + eps).mean() + torch.log(1 + EF / (PF) + eps).mean()
+  #  print("False Ratio", (PF/(EF+PF)))
+  #  print(PF)
+  #  print(EF)
     return -torch.mean(loss), ET / (ET + PT), PF / (EF + PF), ET, EF
 
 folder = "results23_normal_constant_g3lr_1e5_infer"
@@ -205,16 +234,17 @@ else:
 EBM.apply(init_weights)
 
 #optimizers
-optimizer_EG = torch.optim.Adam(list(E.parameters()) + list(G.parameters()),
-                                lr=0.00001, betas=(0.5, 0.999))
+optimizer_EG = torch.optim.Adamax(list(E.parameters()) + list(G.parameters()),
+                                lr=0.000005, betas=(0.5, 0.999))
 optimizer_EBM = torch.optim.Adam(EBM.parameters(),
-                               lr=0.00001, betas=(0.5, 0.999))
+                               lr=0.000005, betas=(0.5, 0.999))
 
 ET_list = []
 EF_list = []
 EBM_loss_list = []
 true_acc_list = []
 false_acc_list = []
+recon_list = []
 
 for epoch in range(n_epochs):
     start_time = time.time()
@@ -224,6 +254,7 @@ for epoch in range(n_epochs):
     EF_loss = 0.
     true_acc_loss = 0.
     false_acc_loss = 0.
+    recon = 0.
     EBM.train()
     E.train()
     G.train()
@@ -240,47 +271,57 @@ for epoch in range(n_epochs):
         mu, logvar = E(images)
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std).cuda()
-        #     true_acc = torch.tensor(0).float()
-        #  while true_acc.mean() < 0.5:
+
+
+        # Update EBM
+      #  true_acc = torch.tensor(0).float()
+     #   while true_acc.mean() < 0.5:
+        print("Update EBM")
         mu, logvar = E(images)
         std = torch.exp(0.5 * logvar)
         z_infer = eps.mul(std).add_(mu)
-        print("Zmax", z_infer.max())
-        print("Zmin", z_infer.min())
-        print("Zmean", z_infer.mean())
-        print("Zstd", z_infer.std())
-  #      z_infer = E(images)
+        #      z_infer = E(images)
         x_gen_train = G(z_infer)
         x_gen_test = G(z)
         mu_fake, logvar_fake = E(x_gen_test)
         s_fake = torch.exp(0.5 * logvar_fake)
         # compute losses
-    #    loss_EBM, true_acc, false_acc, ET, EF = EBM_loss(images, x_gen_test, z_infer, z, G, EBM)
-        loss_EBM, true_acc, false_acc, ET, EF = EBMX_loss(images, x_gen_test, z_infer, z, G, EBM, mu, std, mu_fake, s_fake)
+        #    loss_EBM, true_acc, false_acc, ET, EF = EBM_loss(images, x_gen_test, z_infer, z, G, EBM)
+        loss_EBM, true_acc, false_acc, ET, EF = EBMX_loss(images, x_gen_test, z_infer, z, G, EBM, mu, std, mu_fake,
+                                                          s_fake)
+        print("True Acc:", true_acc.mean())
         optimizer_EBM.zero_grad()
         loss_EBM.backward()
         optimizer_EBM.step()
 
+
         # Upadte EG
-  #      false_acc_g = torch.tensor(0).float()
- #       while false_acc_g.mean() < 0.5:
+     #   false_acc_g = torch.tensor(1).float()
+    #    while false_acc_g.mean() > 0.5:
+        print("Update EG")
         mu, logvar = E(images)
         std = torch.exp(0.5 * logvar)
         z_infer = eps.mul(std).add_(mu)
- #       z_infer = E(images)
+        #          z_infer = E(images)
+        print("Zmax", z_infer.max())
+        print("Zmin", z_infer.min())
+        print("Zmean", z_infer.mean())
+        print("Zstd", z_infer.std())
         x_gen_train = G(z_infer)
         x_gen_test = G(z)
         mu_fake, logvar_fake = E(x_gen_test)
         s_fake = torch.exp(0.5 * logvar_fake)
         # compute Pi
-     #   loss_EG, true_acc_g, false_acc_g, ET, EF = EBM_loss(images, x_gen_test, z_infer,  z, G, EBM, mu, std)
-        loss_EG, true_acc_g, false_acc_g, ET, EF = EBMX_loss(images, x_gen_test, z_infer,  z, G, EBM, mu, std, mu_fake, s_fake)
+        #   loss_EG, true_acc_g, false_acc_g, ET, EF = EBM_loss(images, x_gen_test, z_infer,  z, G, EBM, mu, std)
+        loss_EG, true_acc_g, false_acc_g, ET, EF = EBMX_loss(images, x_gen_test, z_infer, z, G, EBM, mu, std,
+                                                             mu_fake, s_fake)
+        print("False Acc", false_acc_g.mean())
         loss_EG = loss_EG * -1
         optimizer_EG.zero_grad()
         loss_EG.backward()
         optimizer_EG.step()
 
-
+        recon += ((images - x_gen_train) ** 2).mean()
         ET_loss += ET.mean()
         EF_loss += EF.mean()
         EBM_loss_acc += loss_EBM.item()
@@ -292,18 +333,20 @@ for epoch in range(n_epochs):
 
 
     end_time = time.time()
-    print('Epoch [{}/{}], Avg_Loss_EBM: {:.4f}, Avg_Loss_EG: {:.4f}, ET_Loss: {:.4f}, EF_Loss: {:.4f}, Time: {:.4f}'
-          .format(epoch + 1, n_epochs, EBM_loss_acc / (i+1), EG_loss_acc / (i+1), ET_loss / (i+1), EF_loss / (i+1),
+    print('Epoch [{}/{}], Loss_EBM: {:.4f}, Loss_EG: {:.4f}, Recon: {:.4f}, ET_Loss: {:.4f}, EF_Loss: {:.4f}, Time: {:.4f}'
+          .format(epoch + 1, n_epochs, EBM_loss_acc / (i+1), EG_loss_acc / (i+1), recon / (i + 1), ET_loss / (i+1), EF_loss / (i+1),
                   end_time - start_time))
     EBM_loss_list.append(EBM_loss_acc)
     ET_list.append(ET_loss.detach().cpu().numpy())
     EF_list.append(EF_loss.detach().cpu().numpy())
     true_acc_list.append(true_acc_loss.detach().cpu().numpy() / (i+1))
     false_acc_list.append(false_acc_loss.detach().cpu().numpy() / (i+1))
+    recon_list.append(recon.detach().cpu().numpy() / (i + 1))
 
     plot_energy(ET_list, EF_list)
     plot_acc(true_acc_list, false_acc_list)
     plot_loss(EBM_loss_list)
+    plot_recon(recon_list)
     if (epoch) % 5 == 0:
 
         n_show = 10
