@@ -171,7 +171,8 @@ def EBM_loss(image, image_test, z_true, z_fake, G, EBM,  eps=1e-6):
 '''
 
 def EBMX_loss(image, image_test, z_true, z_fake, G, EBM, mu_true, s, mu_fake, s_fake, eps=1e-6, m=True):
-    PT = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_true ** 2) / 2).mean(dim=1) * 1 / (
+
+    PT = (1 / (torch.sqrt(2 * torch.pi) * s) * torch.exp(-((z_true - mu_true) ** 2) / (2 * s * s))).mean(dim=1) * 1 / (
             torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_true) + image) ** 2).mean(dim=1)
     PF = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_fake ** 2) / 2).mean(dim=1) * 1 / (
             torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_fake) + image_test) ** 2).mean(
@@ -235,9 +236,9 @@ EBM.apply(init_weights)
 
 #optimizers
 optimizer_EG = torch.optim.Adamax(list(E.parameters()) + list(G.parameters()),
-                                lr=0.000005, betas=(0.5, 0.999))
+                                lr=0.00001, betas=(0.5, 0.999))
 optimizer_EBM = torch.optim.Adam(EBM.parameters(),
-                               lr=0.000005, betas=(0.5, 0.999))
+                               lr=0.00001, betas=(0.5, 0.999))
 
 ET_list = []
 EF_list = []
