@@ -122,7 +122,7 @@ class EnergyX(nn.Module):
     def __init__(self):
         super(EnergyX, self).__init__()
         self.c = nn.Parameter(torch.tensor(0).float())
-        '''
+
         self.layers = nn.Sequential(
             nn.Linear(img_dim * img_dim, 128),
             nn.LeakyReLU(0.2),
@@ -140,7 +140,7 @@ class EnergyX(nn.Module):
             nn.ReLU(),
             nn.Linear(128, 1),
         )
-
+        '''
     def forward(self, x):
         return self.layers(x) - self.c
 
@@ -172,18 +172,18 @@ def EBM_loss(image, image_test, z_true, z_fake, G, EBM,  eps=1e-6):
 
 def EBMX_loss(image, image_test, z_true, z_fake, G, EBM, mu_true, s, mu_fake, s_fake, eps=1e-6, m=True):
 
-    PT = (1 / (torch.sqrt(2 * torch.pi) * s) * torch.exp(-((z_true - mu_true) ** 2) / (2 * s * s))).mean(dim=1) * 1 / (
-            torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_true) + image) ** 2).mean(dim=1)
-    PF = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_fake ** 2) / 2).mean(dim=1) * 1 / (
-            torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_fake) + image_test) ** 2).mean(
+    PT = (1 / (torch.sqrt(2 * torch.pi) * 1) * torch.exp(-((z_true - 0) ** 2) / (2 * 1 * 1))).sum(dim=1) * 1 / (
+            torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_true) + image) ** 2).sum(dim=1)
+    PF = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_fake ** 2) / 2).sum(dim=1) * 1 / (
+            torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_fake) + image_test) ** 2).sum(
         dim=1)
 
 
     ET = torch.exp(EBM(image).squeeze()) * (1 / (
-            torch.sqrt(2 * torch.pi) * s)* torch.exp(-1 / (2 * s * s) * (z_true - mu_true) ** 2)).mean(
+            torch.sqrt(2 * torch.pi) * s)* torch.exp(-1 / (2 * s * s) * (z_true - mu_true) ** 2)).sum(
         dim=1)
     EF = torch.exp(EBM(G(z_fake)).squeeze()) * (1 / (
-            torch.sqrt(2 * torch.pi) * s_fake) * torch.exp(-1  / (2 * s_fake * s_fake) * (z_fake - mu_fake) ** 2)).mean(
+            torch.sqrt(2 * torch.pi) * s_fake) * torch.exp(-1  / (2 * s_fake * s_fake) * (z_fake - mu_fake) ** 2)).sum(
         dim=1)
     print("PT", PT.mean())
     print("PF", PF.mean())
@@ -198,7 +198,7 @@ def EBMX_loss(image, image_test, z_true, z_fake, G, EBM, mu_true, s, mu_fake, s_
   #  print(EF)
     return -torch.mean(loss), ET / (ET + PT), PF / (EF + PF), ET, EF
 
-folder = "results23_normal_constant_g3lr_1e5_infer"
+folder = "results24_normal_constant_g3lr_1e5_infer"
 if not os.path.exists(folder):
     os.makedirs(folder)
 
@@ -235,8 +235,11 @@ else:
 EBM.apply(init_weights)
 
 #optimizers
-optimizer_EG = torch.optim.Adamax(list(E.parameters()) + list(G.parameters()),
-                                lr=0.00001, betas=(0.5, 0.999))
+#optimizer_EG = torch.optim.Adam(list(E.parameters()) + list(G.parameters()), lr=0.0001, betas=(0.5, 0.999))
+optimizer_EG = torch.optim.Adam([
+            {'params': E.parameters()},
+            {'params': G.parameters(), 'lr': 0.0001, 'betas': (0.5, 0.999)}
+        ], lr=0.0000005, betas=(0.5,0.999))
 optimizer_EBM = torch.optim.Adam(EBM.parameters(),
                                lr=0.00001, betas=(0.5, 0.999))
 
@@ -321,6 +324,7 @@ for epoch in range(n_epochs):
         optimizer_EG.zero_grad()
         loss_EG.backward()
         optimizer_EG.step()
+
 
         recon += ((images - x_gen_train) ** 2).mean()
         ET_loss += ET.mean()
