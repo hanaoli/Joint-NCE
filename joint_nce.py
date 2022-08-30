@@ -124,12 +124,12 @@ class EnergyX(nn.Module):
         self.c = nn.Parameter(torch.tensor(0).float())
 
         self.layers = nn.Sequential(
-            nn.Linear(img_dim * img_dim, 128),
+            nn.Linear(img_dim * img_dim, 512),
             nn.LeakyReLU(0.2),
-            nn.Linear(128, 128),
-            nn.BatchNorm1d(128),
+            nn.Linear(512, 512),
+            nn.BatchNorm1d(512),
             nn.LeakyReLU(0.2),
-            nn.Linear(128, 1),
+            nn.Linear(512, 1),
         )
         '''
         self.layers = nn.Sequential(
@@ -198,7 +198,35 @@ def EBMX_loss(image, image_test, z_true, z_fake, G, EBM, mu_true, s, mu_fake, s_
   #  print(EF)
     return -torch.mean(loss), ET / (ET + PT), PF / (EF + PF), ET, EF
 
-folder = "results24_normal_constant_g3lr_1e5_infer"
+def EBMX_loss2(image, image_test, z_true, z_fake, G, EBM, mu_true, s, mu_fake, s_fake, eps=1e-6, m=True):
+
+    PT = (1 / (torch.sqrt(2 * torch.pi) * 1) * torch.exp(-((z_true - 0) ** 2) / (2 * 1 * 1))).sum(dim=1) * 1 / (
+            torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_true) + image) ** 2).sum(dim=1)
+    PF = 1 / (torch.sqrt(2 * torch.pi)) * torch.exp(-(z_fake ** 2) / 2).sum(dim=1) * 1 / (
+            torch.sqrt(2 * torch.pi) * 0.3) * torch.exp(-1 / (2 * 0.3 * 0.3) * (-G(z_fake) + image_test) ** 2).sum(
+        dim=1)
+
+
+    ET = torch.exp(EBM(image).squeeze()) * (1 / (
+            torch.sqrt(2 * torch.pi) * s)* torch.exp(-1 / (2 * s * s) * (z_true - mu_true) ** 2)).sum(
+        dim=1)
+    EF = torch.exp(EBM(G(z_fake)).squeeze()) * (1 / (
+            torch.sqrt(2 * torch.pi) * s_fake) * torch.exp(-1  / (2 * s_fake * s_fake) * (z_fake - mu_fake) ** 2)).sum(
+        dim=1)
+    print("PT", PT.mean())
+    print("PF", PF.mean())
+    print("ET", ET.mean())
+    print("EF", EF.mean())
+
+    loss = torch.log(ET / (ET + PT) + eps).mean() + torch.log(PF / (EF + PF) + eps).mean()
+   # else:
+   #     loss = torch.log(1 + PT / (ET) + eps).mean() + torch.log(1 + EF / (PF) + eps).mean()
+  #  print("False Ratio", (PF/(EF+PF)))
+  #  print(PF)
+  #  print(EF)
+    return torch.mean(loss), ET / (ET + PT), PF / (EF + PF), ET, EF
+
+folder = "results25_normal_constant_g3lr_1e5_infer"
 if not os.path.exists(folder):
     os.makedirs(folder)
 
@@ -207,7 +235,6 @@ latent_dim = 50
 img_dim = 28
 batch_size = 128
 n_epochs = 2000
-l_rate = 1e-6
 load_model = True
 
 
@@ -238,10 +265,10 @@ EBM.apply(init_weights)
 #optimizer_EG = torch.optim.Adam(list(E.parameters()) + list(G.parameters()), lr=0.0001, betas=(0.5, 0.999))
 optimizer_EG = torch.optim.Adam([
             {'params': E.parameters()},
-            {'params': G.parameters(), 'lr': 0.0001, 'betas': (0.5, 0.999)}
-        ], lr=0.0000005, betas=(0.5,0.999))
+            {'params': G.parameters(), 'lr': 0.00002, 'betas': (0.5, 0.999)}
+        ], lr=0.000005, betas=(0.5,0.999))
 optimizer_EBM = torch.optim.Adam(EBM.parameters(),
-                               lr=0.00001, betas=(0.5, 0.999))
+                               lr=0.00002, betas=(0.5, 0.999))
 
 ET_list = []
 EF_list = []
@@ -275,11 +302,8 @@ for epoch in range(n_epochs):
         mu, logvar = E(images)
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std).cuda()
+       # std = torch.ones_like(std)
 
-
-        # Update EBM
-      #  true_acc = torch.tensor(0).float()
-     #   while true_acc.mean() < 0.5:
         print("Update EBM")
         mu, logvar = E(images)
         std = torch.exp(0.5 * logvar)
@@ -291,40 +315,64 @@ for epoch in range(n_epochs):
         s_fake = torch.exp(0.5 * logvar_fake)
         # compute losses
         #    loss_EBM, true_acc, false_acc, ET, EF = EBM_loss(images, x_gen_test, z_infer, z, G, EBM)
-        loss_EBM, true_acc, false_acc, ET, EF = EBMX_loss(images, x_gen_test, z_infer, z, G, EBM, mu, std, mu_fake,
+        loss_EBM, true_acc, false_acc, ET, EF = EBMX_loss(images, x_gen_test, z_infer, z, G, EBM, mu, std,
+                                                          mu_fake,
                                                           s_fake)
         print("True Acc:", true_acc.mean())
         optimizer_EBM.zero_grad()
         loss_EBM.backward()
+   #     torch.nn.utils.clip_grad_norm_(EBM.parameters(), 1)
+
         optimizer_EBM.step()
+        false_acc_g = torch.tensor(0).float()
+        if false_acc_g.mean() > 1:
+            for i in range(2):
+                print("Update EG")
+                mu, logvar = E(images)
+                std = torch.exp(0.5 * logvar)
+                z_infer = eps.mul(std).add_(mu)
+                #          z_infer = E(images)
+                print("Zmax", z_infer.max())
+                print("Zmin", z_infer.min())
+                print("Zmean", z_infer.mean())
+                print("Zstd", z_infer.std())
+                x_gen_train = G(z_infer)
+                x_gen_test = G(z)
+                mu_fake, logvar_fake = E(x_gen_test)
+                s_fake = torch.exp(0.5 * logvar_fake)
+                # compute Pi
+                #   loss_EG, true_acc_g, false_acc_g, ET, EF = EBM_loss(images, x_gen_test, z_infer,  z, G, EBM, mu, std)
+                loss_EG, true_acc_g, false_acc_g, ET, EF = EBMX_loss2(images, x_gen_test, z_infer, z, G, EBM, mu, std,
+                                                                      mu_fake, s_fake)
+                print("False Acc", false_acc_g.mean())
+                # loss_EG = loss_EG * -1
+                optimizer_EG.zero_grad()
+                loss_EG.backward()
+                optimizer_EG.step()
 
-
-        # Upadte EG
-     #   false_acc_g = torch.tensor(1).float()
-    #    while false_acc_g.mean() > 0.5:
-        print("Update EG")
-        mu, logvar = E(images)
-        std = torch.exp(0.5 * logvar)
-        z_infer = eps.mul(std).add_(mu)
-        #          z_infer = E(images)
-        print("Zmax", z_infer.max())
-        print("Zmin", z_infer.min())
-        print("Zmean", z_infer.mean())
-        print("Zstd", z_infer.std())
-        x_gen_train = G(z_infer)
-        x_gen_test = G(z)
-        mu_fake, logvar_fake = E(x_gen_test)
-        s_fake = torch.exp(0.5 * logvar_fake)
-        # compute Pi
-        #   loss_EG, true_acc_g, false_acc_g, ET, EF = EBM_loss(images, x_gen_test, z_infer,  z, G, EBM, mu, std)
-        loss_EG, true_acc_g, false_acc_g, ET, EF = EBMX_loss(images, x_gen_test, z_infer, z, G, EBM, mu, std,
-                                                             mu_fake, s_fake)
-        print("False Acc", false_acc_g.mean())
-        loss_EG = loss_EG * -1
-        optimizer_EG.zero_grad()
-        loss_EG.backward()
-        optimizer_EG.step()
-
+        else:
+            print("Update EG")
+            mu, logvar = E(images)
+            std = torch.exp(0.5 * logvar)
+            z_infer = eps.mul(std).add_(mu)
+            #          z_infer = E(images)
+            print("Zmax", z_infer.max())
+            print("Zmin", z_infer.min())
+            print("Zmean", z_infer.mean())
+            print("Zstd", z_infer.std())
+            x_gen_train = G(z_infer)
+            x_gen_test = G(z)
+            mu_fake, logvar_fake = E(x_gen_test)
+            s_fake = torch.exp(0.5 * logvar_fake)
+            # compute Pi
+            #   loss_EG, true_acc_g, false_acc_g, ET, EF = EBM_loss(images, x_gen_test, z_infer,  z, G, EBM, mu, std)
+            loss_EG, true_acc_g, false_acc_g, ET, EF = EBMX_loss2(images, x_gen_test, z_infer, z, G, EBM, mu, std,
+                                                                  mu_fake, s_fake)
+            print("False Acc", false_acc_g.mean())
+            # loss_EG = loss_EG * -1
+            optimizer_EG.zero_grad()
+            loss_EG.backward()
+            optimizer_EG.step()
 
         recon += ((images - x_gen_train) ** 2).mean()
         ET_loss += ET.mean()
@@ -333,6 +381,8 @@ for epoch in range(n_epochs):
         EG_loss_acc += loss_EG.item()
         true_acc_loss += true_acc.mean()
         false_acc_loss += false_acc.mean()
+
+
 
 
 
